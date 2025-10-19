@@ -1,14 +1,25 @@
 """
 Medical FAQ Chatbot - Streamlit Application
+Fixed for Streamlit Cloud Deployment
 """
 
 import streamlit as st
+
+# THIS MUST BE THE FIRST STREAMLIT COMMAND
+st.set_page_config(
+    page_title="Medical FAQ Chatbot",
+    page_icon="🏥",
+    layout="wide"
+)
+
+# Now import everything else
 import pandas as pd
 import pickle
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 import re
+import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
@@ -16,12 +27,23 @@ from sklearn.metrics.pairwise import cosine_similarity
 import warnings
 warnings.filterwarnings('ignore')
 
-# Page configuration
-st.set_page_config(
-    page_title="Medical FAQ Chatbot",
-    page_icon="🏥",
-    layout="wide"
-)
+# Download NLTK data on first run (CRITICAL for Streamlit Cloud)
+@st.cache_resource
+def download_nltk_data():
+    """Download required NLTK data files"""
+    try:
+        nltk.data.find('tokenizers/punkt')
+        nltk.data.find('corpora/stopwords')
+        nltk.data.find('corpora/wordnet')
+    except LookupError:
+        nltk.download('punkt', quiet=True)
+        nltk.download('stopwords', quiet=True)
+        nltk.download('wordnet', quiet=True)
+        nltk.download('averaged_perceptron_tagger', quiet=True)
+        nltk.download('omw-1.4', quiet=True)
+
+# Call this before anything else
+download_nltk_data()
 
 # Dark theme CSS
 st.markdown("""
@@ -72,6 +94,7 @@ st.markdown("""
 
 # Text preprocessing
 def clean_text(text):
+    """Clean and preprocess text data"""
     if pd.isna(text):
         return ""
     text = str(text).lower()
@@ -80,6 +103,7 @@ def clean_text(text):
     return text.strip()
 
 class TextPreprocessor:
+    """Text preprocessing class with lemmatization and stopword removal"""
     def __init__(self):
         self.lemmatizer = WordNetLemmatizer()
         self.stop_words = set(stopwords.words('english'))
@@ -87,13 +111,19 @@ class TextPreprocessor:
         self.stop_words = self.stop_words - medical_keep_words
     
     def preprocess(self, text):
-        tokens = word_tokenize(text.lower())
-        tokens = [self.lemmatizer.lemmatize(token) for token in tokens 
-                 if token.isalnum() and token not in self.stop_words]
-        return ' '.join(tokens)
+        """Preprocess text with tokenization, lemmatization and stopword removal"""
+        try:
+            tokens = word_tokenize(text.lower())
+            tokens = [self.lemmatizer.lemmatize(token) for token in tokens 
+                     if token.isalnum() and token not in self.stop_words]
+            return ' '.join(tokens)
+        except Exception as e:
+            st.error(f"Error in preprocessing: {e}")
+            return text
 
 # Chatbot class
 class MedicalChatbot:
+    """Medical FAQ Chatbot using TF-IDF, Semantic Search and Hybrid approaches"""
     def __init__(self, df, tfidf_vectorizer, tfidf_matrix, 
                  sentence_model, faiss_index, preprocessor):
         self.df = df.reset_index(drop=True)
@@ -104,6 +134,7 @@ class MedicalChatbot:
         self.preprocessor = preprocessor
     
     def get_answer_tfidf(self, question, top_k=3):
+        """Get answer using TF-IDF similarity"""
         processed_q = self.preprocessor.preprocess(clean_text(question))
         question_vec = self.tfidf_vectorizer.transform([processed_q])
         similarities = cosine_similarity(question_vec, self.tfidf_matrix)[0]
@@ -120,6 +151,7 @@ class MedicalChatbot:
         return results
     
     def get_answer_semantic(self, question, top_k=3):
+        """Get answer using Semantic similarity (Sentence Transformers + FAISS)"""
         question_embedding = self.sentence_model.encode([clean_text(question)])
         faiss.normalize_L2(question_embedding)
         similarities, indices = self.faiss_index.search(question_embedding, top_k)
@@ -135,6 +167,7 @@ class MedicalChatbot:
         return results
     
     def get_answer_hybrid(self, question, top_k=3, weights=(0.4, 0.6)):
+        """Hybrid approach combining TF-IDF and Semantic similarity"""
         tfidf_results = self.get_answer_tfidf(question, top_k=10)
         semantic_results = self.get_answer_semantic(question, top_k=10)
         
@@ -185,6 +218,7 @@ class MedicalChatbot:
         return results
     
     def answer(self, question, method='hybrid', top_k=3):
+        """Main function to get answer"""
         if method == 'tfidf':
             return self.get_answer_tfidf(question, top_k)
         elif method == 'semantic':
@@ -195,6 +229,7 @@ class MedicalChatbot:
 # Load models
 @st.cache_resource
 def load_models():
+    """Load all required models and data"""
     try:
         df = pd.read_csv('processed_medquad.csv')
         
@@ -217,12 +252,16 @@ def load_models():
         return df, tfidf_vectorizer, tfidf_matrix, preprocessor, faiss_index, sentence_model
     
     except FileNotFoundError as e:
-        st.error(f"❌ Error: Model files not found!")
-        st.info("Please run the Jupyter notebook first to generate model files.")
+        st.error(f"❌ Error: Model files not found! {str(e)}")
+        st.info("Please ensure all required files are uploaded to your Streamlit Cloud repository.")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ Error loading models: {str(e)}")
         st.stop()
 
 @st.cache_resource
 def initialize_chatbot():
+    """Initialize the chatbot with loaded models"""
     df, tfidf_vectorizer, tfidf_matrix, preprocessor, faiss_index, sentence_model = load_models()
     
     chatbot = MedicalChatbot(
@@ -238,6 +277,7 @@ def initialize_chatbot():
 
 # Main app
 def main():
+    """Main application function"""
     # Load models
     with st.spinner("⏳ Loading chatbot..."):
         chatbot, df = initialize_chatbot()
@@ -328,7 +368,11 @@ def main():
                 
                 with st.spinner("🔍 Searching for answers..."):
                     method = search_method.lower()
-                    results = chatbot.answer(question, method=method, top_k=num_results)
+                    try:
+                        results = chatbot.answer(question, method=method, top_k=num_results)
+                    except Exception as e:
+                        st.error(f"Error during search: {str(e)}")
+                        st.stop()
                 
                 # Display results
                 for i, result in enumerate(results, 1):
