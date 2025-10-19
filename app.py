@@ -1,6 +1,5 @@
 """
 Medical FAQ Chatbot - Streamlit Application
-Run with: streamlit run chatbot_app.py
 """
 
 import streamlit as st
